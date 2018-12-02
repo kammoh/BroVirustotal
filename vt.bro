@@ -27,7 +27,7 @@ export {
 
     const url = "https://www.virustotal.com/vtapi/v2/file/report" &redef;
 
-    const vt_apikey = "38ea87eb8e2238fb1ab27c9277600eb43ac665ce8164cbf3c4e9d4408ad043f8" &redef;
+    const vt_apikey = "" &redef;
 
 }
 
