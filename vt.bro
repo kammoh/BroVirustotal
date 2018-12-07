@@ -10,11 +10,21 @@ export {
         VTMalicious
     };
 
+    redef Notice::emailed_types += {
+	    MalwareHashCheck::VTMalicious,
+    };
+
     type VTResponse: record
     {
         positives : string;
         total : string;
     };
+
+    hook Notice::policy(n: Notice::Info)
+	{
+	if ( n$note == MalwareHashCheck::VTMalicious )
+		add n$actions[Notice::ACTION_EMAIL];
+	}
 
     const match_file_types = /application\/x-executable/ |
                              /application\/x-dosexec/ |
@@ -29,12 +39,14 @@ export {
 
     const vt_apikey = "" &redef;
 
+    const threshold : double = 20.0 &redef;
+
 }
 
 
 
-global checked_hashes: set[string] &synchronized;
-global matched_hashes: set[string] &synchronized;
+# global checked_hashes: set[string] &synchronized;
+# global matched_hashes: set[string] &synchronized;
 
 ## Extract integer (or quoted string) value from a key:value (or key:"value").
 function extract_value(str: string) : string
@@ -73,8 +85,6 @@ function do_lookup(hash: string, source: string, fi: Notice::FileInfo)
     {
     
     # https://www.virustotal.com/vtapi/v2/file/report?apikey=<api-key>&resource=<hash>
-        local data = fmt("resource=%s", hash);
-        local key = fmt("-d apikey=%s",vt_apikey);
         local my_url = fmt("%s?apikey=%s&resource=%s", url, vt_apikey, hash);
         local req: ActiveHTTP::Request = ActiveHTTP::Request($url=my_url, $method="GET");
         when (local res = ActiveHTTP::request(req))
@@ -85,18 +95,21 @@ function do_lookup(hash: string, source: string, fi: Notice::FileInfo)
                     {
                     local body = res$body;
                     local resp : VTResponse = parse_vt_response(body);
-                    local positives: int = to_int(resp$positives);
-                    local total: int = to_int(resp$total);
-                    local threat : double = to_double(resp$positives)/to_double(resp$total) * 100.0;
-
-                    local msg = fmt("detection for file-hash %s over %s = [%d/%d] (%%%.2f)", hash, source, positives, total, threat);
-                    if ( source == "HTTP" )
+                    if (resp$positives != "N/A")
                         {
-                        print(msg);
+                        local positives: int = to_int(resp$positives);
+                        local total: int = to_int(resp$total);
+                        local threat : double = to_double(resp$positives)/to_double(resp$total) * 100.0;
+                        
+                        local msg = fmt("detection for file-hash %s over %s = [%d/%d] (%%%.2f)", hash, source, positives, total, threat);
+                        if ( threat > threshold )
+                            {
+                            local n: Notice::Info = Notice::Info($note=VTMalicious, $msg=msg);
+                            Notice::populate_file_info2(fi, n);
+                            NOTICE(n);
+                            print(msg);
+                            }
                         }
-                    # local n: Notice::Info = Notice::Info($note=VTHashMatch, $msg=msg);
-                    # Notice::populate_file_info2(fi, n);
-                    # NOTICE(n);
                     }
                 }
             }
@@ -104,7 +117,7 @@ function do_lookup(hash: string, source: string, fi: Notice::FileInfo)
 
 event file_hash(f: fa_file, kind: string, hash: string)
     {
-        if ( kind == "sha1" && f?$info && f$info?$mime_type)# && match_file_types in f$info$mime_type)
+        if ( kind == "sha1" && f?$info && f$info?$mime_type && match_file_types in f$info$mime_type)
             {
                 # TODO check the list of already looked-up hashes
                 do_lookup(hash, f$source, Notice::create_file_info(f));
